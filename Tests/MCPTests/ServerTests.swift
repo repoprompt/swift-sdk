@@ -251,6 +251,94 @@ struct ServerTests {
         await transport.disconnect()
     }
 
+    @Test("Initialize decodes object-valued experimental capabilities")
+    func testInitializeDecodesObjectValuedExperimentalCapabilities() throws {
+        let requestJSON = #"""
+            {
+              "jsonrpc": "2.0",
+              "id": 0,
+              "method": "initialize",
+              "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {
+                  "experimental": {
+                    "codex/auth-change": {}
+                  },
+                  "elicitation": {
+                    "form": {},
+                    "url": {}
+                  }
+                },
+                "clientInfo": {
+                  "name": "codex-mcp-client",
+                  "title": "Codex",
+                  "version": "0.154.0"
+                }
+              }
+            }
+            """#
+
+        let request = try JSONDecoder().decode(
+            Request<Initialize>.self,
+            from: Data(requestJSON.utf8)
+        )
+
+        #expect(
+            request.params.capabilities.experimental == [
+                "codex/auth-change": .object([:])
+            ]
+        )
+    }
+
+    @Test("Initialize preserves unknown experimental JSON values")
+    func testInitializePreservesUnknownExperimentalJSONValues() throws {
+        let capabilitiesJSON = #"""
+            {
+              "experimental": {
+                "example/metadata": {
+                  "enabled": true,
+                  "modes": [1, "two"]
+                }
+              }
+            }
+            """#
+
+        let capabilities = try JSONDecoder().decode(
+            Client.Capabilities.self,
+            from: Data(capabilitiesJSON.utf8)
+        )
+
+        #expect(
+            capabilities.experimental == [
+                "example/metadata": .object([
+                    "enabled": .bool(true),
+                    "modes": .array([.int(1), .string("two")]),
+                ])
+            ]
+        )
+
+        let roundTripped = try JSONDecoder().decode(
+            Client.Capabilities.self,
+            from: JSONEncoder().encode(capabilities)
+        )
+        #expect(roundTripped == capabilities)
+    }
+
+    @Test("Initialize distinguishes empty and absent experimental capabilities")
+    func testInitializeDistinguishesEmptyAndAbsentExperimentalCapabilities() throws {
+        let empty = try JSONDecoder().decode(
+            Client.Capabilities.self,
+            from: Data(#"{"experimental":{}}"#.utf8)
+        )
+        let legacy = try JSONDecoder().decode(
+            Client.Capabilities.self,
+            from: Data(#"{}"#.utf8)
+        )
+
+        #expect(empty.experimental == [:])
+        #expect(legacy.experimental == nil)
+    }
+
     @Test("Initialize hook - successful")
     func testInitializeHookSuccess() async throws {
         let transport = MockTransport()
