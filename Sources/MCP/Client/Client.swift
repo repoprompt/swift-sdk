@@ -147,14 +147,14 @@ public actor Client {
         /// Whether the client supports elicitation
         public var elicitation: Elicitation?
         /// Experimental features supported by the client
-        public var experimental: [String: String]?
+        public var experimental: [String: Value]?
         /// Whether the client supports roots
         public var roots: Capabilities.Roots?
 
         public init(
             sampling: Sampling? = nil,
             elicitation: Elicitation? = nil,
-            experimental: [String: String]? = nil,
+            experimental: [String: Value]? = nil,
             roots: Capabilities.Roots? = nil
         ) {
             self.sampling = sampling
