@@ -2,32 +2,42 @@ import Foundation
 import RegexBuilder
 
 extension Data {
-    /// Regex pattern for data URLs
-    @inline(__always) private static var dataURLRegex:
-        Regex<(Substring, Substring, Substring?, Substring)>
-    {
-        Regex {
-            "data:"
-            Capture {
-                ZeroOrMore(.reluctant) {
-                    CharacterClass.anyOf(",;").inverted
-                }
-            }
-            Optionally {
-                ";charset="
+    // Regex is not Sendable. Confine the shared pattern and its lazy matching state
+    // behind a lock; only immutable captured substrings leave the critical section.
+    private final class DataURLPattern: @unchecked Sendable {
+        private let lock = NSLock()
+        private let regex: Regex<(Substring, Substring, Substring?, Substring)> =
+            Regex {
+                "data:"
                 Capture {
-                    OneOrMore(.reluctant) {
+                    ZeroOrMore(.reluctant) {
                         CharacterClass.anyOf(",;").inverted
                     }
                 }
+                Optionally {
+                    ";charset="
+                    Capture {
+                        OneOrMore(.reluctant) {
+                            CharacterClass.anyOf(",;").inverted
+                        }
+                    }
+                }
+                Optionally { ";base64" }
+                ","
+                Capture {
+                    ZeroOrMore { .any }
+                }
             }
-            Optionally { ";base64" }
-            ","
-            Capture {
-                ZeroOrMore { .any }
-            }
+
+        func match(_ string: String) -> (Substring, Substring, Substring?, Substring)? {
+            lock.lock()
+            defer { lock.unlock() }
+            return string.wholeMatch(of: regex)?.output
         }
     }
+
+    // Initialized once, lazily, only when a string can actually be a data URL.
+    private static let dataURLPattern = DataURLPattern()
 
     /// Checks if a given string is a valid data URL.
     ///
@@ -35,7 +45,8 @@ extension Data {
     /// - Returns: `true` if the string is a valid data URL, otherwise `false`.
     /// - SeeAlso: [RFC 2397](https://www.rfc-editor.org/rfc/rfc2397.html)
     public static func isDataURL(string: String) -> Bool {
-        return string.wholeMatch(of: dataURLRegex) != nil
+        guard string.hasPrefix("data:") else { return false }
+        return dataURLPattern.match(string) != nil
     }
 
     /// Parses a data URL string into its MIME type and data components.
@@ -44,12 +55,12 @@ extension Data {
     /// - Returns: A tuple containing the MIME type and decoded data, or `nil` if parsing fails.
     /// - SeeAlso: [RFC 2397](https://www.rfc-editor.org/rfc/rfc2397.html)
     public static func parseDataURL(_ string: String) -> (mimeType: String, data: Data)? {
-        guard let match = string.wholeMatch(of: dataURLRegex) else {
+        guard string.hasPrefix("data:"), let match = dataURLPattern.match(string) else {
             return nil
         }
 
         // Extract components using strongly typed captures
-        let (_, mediatype, charset, encodedData) = match.output
+        let (_, mediatype, charset, encodedData) = match
 
         let isBase64 = string.contains(";base64,")
 

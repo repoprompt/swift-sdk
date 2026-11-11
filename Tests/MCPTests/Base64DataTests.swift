@@ -1,10 +1,89 @@
 import Foundation
+import RegexBuilder
 import Testing
 
 @testable import MCP
 
 @Suite("Base64 Data Tests")
 struct Base64DataTests {
+
+    @Test("Cached pattern and prefix guard preserve original data URL recognition")
+    func testDataURLRecognitionEquivalence() {
+        let originalPattern =
+            Regex {
+                "data:"
+                Capture {
+                    ZeroOrMore(.reluctant) {
+                        CharacterClass.anyOf(",;").inverted
+                    }
+                }
+                Optionally {
+                    ";charset="
+                    Capture {
+                        OneOrMore(.reluctant) {
+                            CharacterClass.anyOf(",;").inverted
+                        }
+                    }
+                }
+                Optionally { ";base64" }
+                ","
+                Capture {
+                    ZeroOrMore { .any }
+                }
+            }
+        let inputs = [
+            "", "data", "data:", "data:,", "data:\u{0301},x", "d\u{0301}ata:,x",
+            "\u{FEFF}data:,x", " data:,x", "DATA:,x", "data:;base64,",
+            "data:a;charset=;base64,x", "data:,line1\nline2", "data:,\0",
+            "data:,caf\u{00E9}", "data:text/plain;charset=utf-8,hello%20world",
+            "data:application/octet-stream;base64,AAEC", "ordinary tool description",
+        ]
+        for input in inputs {
+            #expect(Data.isDataURL(string: input) == (input.wholeMatch(of: originalPattern) != nil))
+        }
+    }
+
+    @Test("Value decoding preserves ordinary strings and data URLs")
+    func testValueStringDecoding() throws {
+        let strings = [
+            "", "read_file", "Read data: examples without treating the description as data",
+            "https://example.com/data:,hello", "DATA:,hello", "dat:,hello",
+            "data:text/plain", "data:text/plain;base64,SGVsbG8=!",
+            "data:,hello%20world", "data:text/plain;base64,SGVsbG8=",
+            "data:;charset=utf-8,hello", "data:application/octet-stream;base64,AAEC", "data:,",
+        ]
+        let expected: [Value] =
+            strings.prefix(8).map(Value.string) + [
+                .data(mimeType: "text/plain", Data("hello world".utf8)),
+                .data(mimeType: "text/plain", Data("Hello".utf8)),
+                .data(mimeType: "text/plain;charset=utf-8", Data("hello".utf8)),
+                .data(mimeType: "application/octet-stream", Data([0, 1, 2])),
+                .data(mimeType: "text/plain", Data()),
+            ]
+        let encoded = try JSONEncoder().encode(strings)
+        #expect(try JSONDecoder().decode([Value].self, from: encoded) == expected)
+    }
+
+    @Test("Concurrent decoders share the data URL pattern without changing values")
+    func testConcurrentDataURLValueDecoding() async throws {
+        try await withThrowingTaskGroup(of: (Int, [Value]).self) { group in
+            for index in 0..<64 {
+                group.addTask {
+                    let encoded = try JSONEncoder().encode([
+                        "ordinary schema string \(index)", "data:,hello-\(index)",
+                    ])
+                    return (index, try JSONDecoder().decode([Value].self, from: encoded))
+                }
+            }
+            for try await (index, decoded) in group {
+                let expected: [Value] = [
+                    .string("ordinary schema string \(index)"),
+                    .data(mimeType: "text/plain", Data("hello-\(index)".utf8)),
+                ]
+                #expect(decoded == expected)
+            }
+        }
+    }
 
     @Test("Check valid data URLs")
     func testIsDataURL() {

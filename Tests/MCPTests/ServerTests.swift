@@ -19,7 +19,8 @@ private actor ResponseDeliveryRequestGate {
         let token = nextToken
         nextToken += 1
         try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Swift.Error>) in
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Swift.Error>) in
                 if Task.isCancelled {
                     continuation.resume(throwing: CancellationError())
                 } else if released.contains(id) {
@@ -82,7 +83,8 @@ private actor ManualResponseSendDeadline {
         let token = nextToken
         nextToken += 1
         try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Swift.Error>) in
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Swift.Error>) in
                 if Task.isCancelled {
                     continuation.resume(throwing: CancellationError())
                 } else {
@@ -568,7 +570,9 @@ struct ServerTests {
 
         #expect(await serverTransport.responseSendAttemptCount(for: selectedID) == 1)
         #expect(await serverTransport.disconnectCallCount == 1)
-        #expect(await serverTransport.sentMessages.contains(where: { $0.contains("\"id\":102") }) == false)
+        #expect(
+            await serverTransport.sentMessages.contains(where: { $0.contains("\"id\":102") })
+                == false)
 
         let failureEntry = recorder.entries().first(where: {
             $0.metadata["provenance"] == "response_send_failed"
@@ -576,10 +580,11 @@ struct ServerTests {
         })
         #expect(failureEntry?.metadata["error_code"] == "-32001")
         #expect(failureEntry?.metadata["error_type"]?.contains("MCPError") == true)
-        #expect(failureEntry?.metadata.values.contains(where: {
-            $0.contains("transport-secret-must-not-be-logged")
-                || $0.contains("payload-must-not-be-logged")
-        }) == false)
+        #expect(
+            failureEntry?.metadata.values.contains(where: {
+                $0.contains("transport-secret-must-not-be-logged")
+                    || $0.contains("payload-must-not-be-logged")
+            }) == false)
 
         do {
             _ = try await client.send(
@@ -696,9 +701,10 @@ struct ServerTests {
         #expect(deadlineEntry?.metadata["timeout_seconds"] == "30.0")
         #expect(Int(deadlineEntry?.metadata["bytes"] ?? "") != nil)
         #expect(Double(deadlineEntry?.metadata["elapsed_seconds"] ?? "") != nil)
-        #expect(deadlineEntry?.metadata.values.contains(where: {
-            $0.contains("payload-must-not-be-logged")
-        }) == false)
+        #expect(
+            deadlineEntry?.metadata.values.contains(where: {
+                $0.contains("payload-must-not-be-logged")
+            }) == false)
 
         do {
             _ = try await client.send(
@@ -793,11 +799,28 @@ struct ServerTests {
             await counter.increment()
             return ListTools.Result(tools: [])
         }
-        try await transport.queue(request: ListTools.request(id: .number(1), .init()))
-        try await transport.queue(request: ListTools.request(id: .number(2), .init()))
-
         try await server.start(transport: transport)
-        try await Task.sleep(for: .milliseconds(300))
+        let disconnects = await transport.disconnectionEvents()
+        try await transport.queue(request: ListTools.request(id: .number(1), .init()))
+        let disconnected = await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                for await _ in disconnects { return true }
+                return false
+            }
+            group.addTask {
+                try? await Task.sleep(for: .milliseconds(300))
+                return false
+            }
+            let result = await group.next() ?? false
+            group.cancelAll()
+            return result
+        }
+        #expect(disconnected)
+        // A later request means after the terminal send failure, not an already
+        // admitted concurrent request racing the first response.
+        if disconnected {
+            try await transport.queue(request: ListTools.request(id: .number(2), .init()))
+        }
 
         #expect(await counter.count == 1)
         #expect(await transport.sendAttempts == 1)

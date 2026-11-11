@@ -65,6 +65,8 @@ actor MockTransport: Transport {
         }
     }
 
+    private var disconnectionObservers: [AsyncStream<Void>.Continuation] = []
+
     private var pairedTransport: MockTransport?
     private var dataToReceive: [Data] = []
     private(set) var receivedMessages: [String] = []
@@ -108,11 +110,32 @@ actor MockTransport: Transport {
         isConnected = true
     }
 
+    func disconnectionEvents() -> AsyncStream<Void> {
+        let (stream, continuation) = AsyncStream<Void>.makeStream(
+            bufferingPolicy: .bufferingNewest(1))
+        if isConnected {
+            disconnectionObservers.append(continuation)
+        } else {
+            continuation.yield(())
+            continuation.finish()
+        }
+        return stream
+    }
+
+    private func publishDisconnection() {
+        for observer in disconnectionObservers {
+            observer.yield(())
+            observer.finish()
+        }
+        disconnectionObservers.removeAll()
+    }
+
     public func disconnect() async {
         disconnectCallCount += 1
         guard isConnected else { return }
 
         isConnected = false
+        publishDisconnection()
         dataStreamContinuation?.finish()
         dataStreamContinuation = nil
         resumeSuspendedSends(throwing: MCPError.connectionClosed)
@@ -126,6 +149,7 @@ actor MockTransport: Transport {
         guard isConnected else { return }
 
         isConnected = false
+        publishDisconnection()
         dataStreamContinuation?.finish(throwing: MCPError.connectionClosed)
         dataStreamContinuation = nil
         resumeSuspendedSends(throwing: MCPError.connectionClosed)
